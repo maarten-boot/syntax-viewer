@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# syntax-viewer: one virtualenv per host (see Makefile)
+.venv-*/

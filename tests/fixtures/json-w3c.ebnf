@@ -1,0 +1,21 @@
+/* JSON (RFC 8259) in W3C EBNF notation, written for syntax-viewer tests. */
+
+[1]  json     ::= ws value ws
+[2]  value    ::= object | array | string | number
+                | 'true' | 'false' | 'null'
+/* An object is a set of name/value pairs. */
+[3]  object   ::= '{' ws ( member ( ws ',' ws member )* )? ws '}'
+[4]  member   ::= string ws ':' ws value
+                  [ VC: Unique Names ]
+[5]  array    ::= '[' ws ( value ( ws ',' ws value )* )? ws ']'
+
+[6]  string   ::= '"' char* '"'
+[7]  char     ::= [^"\#x0-#x1F] | '\' escape
+[8]  escape   ::= ["\/bfnrt] | 'u' hex hex hex hex
+[9]  hex      ::= [0-9a-fA-F]
+[10] number   ::= '-'? int frac? exp?
+[11] int      ::= '0' | [1-9] [0-9]*
+[12] frac     ::= '.' [0-9]+
+[13] exp      ::= [eE] [+-]? [0-9]+
+[14] ws       ::= ( #x20 | #x9 | #xA | #xD )*
+[15] keyword  ::= ( 'true' | 'false' | 'null' ) - 'nul'

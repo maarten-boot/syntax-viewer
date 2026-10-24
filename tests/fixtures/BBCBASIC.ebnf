@@ -1,0 +1,1072 @@
+(* ======================================================================
+   BBC BASIC (Z80) version 5.00 -- EBNF grammar
+   ======================================================================
+
+   Source version : BBC BASIC (Z80) v5.00 (C) R.T.Russell 1981-2025
+                    MAIN.Z80 v5.2 (16-02-2025), EXEC.Z80 v5.3 (31-01-2025),
+                    EVAL.Z80 v5.3 (16-03-2025), ASMB.Z80 v5.0 (14-05-2024).
+                    Graphics/sound statement syntax from ACORN.Z80 (Acorn
+                    Z80 Second Processor edition); in the generic CP/M build
+                    those entry points come from HOOK.Z80 and raise "Sorry".
+
+   How derived    : by reading the Z80 source, not from BBC BASIC manuals.
+                    Lexical rules come from the tokeniser (MAIN.Z80: LEX,
+                    LEXAN, KEYWDS, LINNUM, ENCODE, RANGE, LOCATE).  Statement
+                    rules come from the handler that the XEQ dispatcher
+                    (EXEC.Z80: XEQ, CMDTAB, EXTRAS, LET0) jumps to, following
+                    its calls to NXT, COMMA, BRAKET, TERMQ, NLIST, EQUALS,
+                    EXPR/EXPRN/EXPRI/EXPRS, ITEM/ITEMI/ITEMS, GETVAR/VAR, etc.
+                    Expression rules come from EVAL.Z80: EXPR..EXPR5, ITEM,
+                    RELOPQ, SAVE/DOIT, FUNTBL, EXTRAS.  Assembler rules come
+                    from ASMB.Z80.
+
+   Conventions    : ISO 14977 style.  "=" defines, "|" alternation,
+                    "[ ]" optional, "{ }" zero or more, "( )" grouping,
+                    "..." terminal, (* *) comment.
+                    "a" .. "z"   denotes a character range (informal).
+                    Keyword terminals such as "PRINT" stand for the single
+                    token byte the tokeniser produces for them (see 2.3).
+                    Spaces: the interpreter skips spaces (routine NXT) before
+                    nearly every lexical item, so optional white space is
+                    not written in the rules; places where a space is NOT
+                    allowed (or where one breaks things) are noted.
+                    EOL is the carriage return (&0D) ending a line.
+                    Each rule is followed by (* src: FILE:LABEL *).
+                    "UNSURE" marks places where the reading is uncertain.
+                    "QUIRK" marks places where the code accepts something
+                    surprising.
+   ====================================================================== *)
+
+
+(* ======================================================================
+   1. CHARACTER CLASSES
+   ====================================================================== *)
+
+digit          = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+upper          = "A" .. "Z" ;
+lower          = "a" .. "z" ;
+hex-digit      = digit | "A" .. "F" ;     (* upper case only *)
+                                          (* src: EVAL.Z80:HEXDIG *)
+bin-digit      = "0" | "1" ;              (* src: EVAL.Z80:BINDIG *)
+
+(* Characters that may continue a name.  RANGE1 accepts 0-9, @, A-Z and
+   the range "_" .. "z" (which also contains the backquote "`").           *)
+name-char      = digit | "@" | upper | "_" | "`" | lower ;
+                                          (* src: MAIN.Z80:RANGE1/RANGE2 *)
+
+(* A "delimiter" is any character that is not a name-char.               *)
+
+
+(* ======================================================================
+   2. LEXICAL STRUCTURE
+   ====================================================================== *)
+
+(* ---- 2.1 Line numbers ------------------------------------------------ *)
+
+line-number    = digit { digit } ;
+    (* Decimal 0..65535; larger gives "Too big".  Leading spaces skipped.
+       A line number of 0 (or none) means "execute immediately".           *)
+                                          (* src: MAIN.Z80:LINNUM, NOTCMD *)
+
+(* Inside a line, a decimal number that directly follows GOTO, GOSUB,
+   RESTORE, TRACE, THEN or ELSE (spaces allowed), and every further number
+   following it after commas/spaces, is converted at entry time to a
+   4-byte line-number token: &8D b1 b2 b3.  At run time this token is an
+   item (function &8D, DECODE).
+   QUIRK: a literal 0 in such a position is consumed but not encoded, i.e.
+   it disappears from the line ("GOTO 0" becomes "GOTO").                   *)
+line-ref       = line-number ;            (* stored as &8D + 3 bytes *)
+                                          (* src: MAIN.Z80:LEXAN5, LIST1, ENCODE;
+                                             EVAL.Z80:DECODE *)
+
+(* ---- 2.2 Tokenisation rules --------------------------------------- *)
+(* Keywords are recognised only in UPPER case.  Matching is done against
+   the KEYWDS table in table order (first match wins):
+     - a keyword whose table entry has a trailing space (marked "+delim"
+       below) only matches if the next source character is a delimiter
+       (not a name-char); e.g. "COUNTER" is a variable, "COUNT" is a token;
+     - other keywords match as a prefix regardless of what follows, so
+       "PRINTX" is PRINT X and "TOTAL" is TO TAL;
+     - abbreviation: one or more leading characters of a keyword followed
+       by "." match the FIRST keyword in table order with that prefix
+       (e.g. "P." = PRINT, "E." = ENDPROC, "REN." = RENUMBER);
+   Tokenising is suppressed:
+     - inside "..." strings;
+     - after REM, after DATA at statement start, and after "*" at
+       statement start (rest of the line is kept as raw text);
+     - inside a name: once a non-keyword letter starts a name the
+       remaining name-chars are copied raw (keywords may appear inside a
+       name, e.g. "XPRINT", but not at its start);
+     - directly after FN or PROC (the procedure name is raw);
+     - after "&" for the letters A-F (hex constants) until a character
+       >= "G" or a delimiter.
+   "Left" (statement-start) mode applies to the first non-space, non-comma
+   character of a line and after ":", THEN, ELSE, REPEAT and ERROR.  In left
+   mode the pseudo-variables PTR PAGE TIME LOMEM HIMEM get their statement
+   tokens (&CF-&D3) instead of their function tokens (&8F-&93).            *)
+                                          (* src: MAIN.Z80:LEX, LEX0..LEX7,
+                                             LEXAN1..LEXANF, LIST1, LIST2 *)
+
+(* ---- 2.3 Keyword tokens (from KEYWDS; +delim = must be followed by a
+            delimiter).  Tokens &00-&10 are v5 additions.               *)
+(*
+   &01 CIRCLE        &02 ELLIPSE       &03 FILL          &04 MOUSE
+   &05 ORIGIN        &06 QUIT +delim   &07 RECTANGLE     &08 SWAP
+   &09 SYS           &0A TINT          &0B WAIT +delim   &0C INSTALL
+   &0E PUT           &0F BY +delim     &10 EXIT +delim
+   &80 AND           &81 DIV           &82 EOR           &83 MOD
+   &84 OR            &85 ERROR         &86 LINE          &87 OFF +delim
+   &88 STEP          &89 SPC           &8A TAB(          &8B ELSE
+   &8C THEN          &8D (line number) &8E OPENIN        &8F PTR +delim
+   &90 PAGE +delim   &91 TIME +delim   &92 LOMEM +delim  &93 HIMEM +delim
+   &94 ABS           &95 ACS           &96 ADVAL         &97 ASC
+   &98 ASN           &99 ATN           &9A BGET +delim   &9B COS
+   &9C COUNT +delim  &9D DEG           &9E ERL +delim    &9F ERR +delim
+   &A0 EVAL          &A1 EXP           &A2 EXT +delim    &A3 FALSE +delim
+   &A4 FN            &A5 GET           &A6 INKEY         &A7 INSTR(
+   &A8 INT           &A9 LEN           &AA LN            &AB LOG
+   &AC NOT           &AD OPENUP        &AE OPENOUT       &AF PI +delim
+   &B0 POINT(        &B1 POS +delim    &B2 RAD           &B3 RND +delim
+   &B4 SGN           &B5 SIN           &B6 SQR           &B7 TAN
+   &B8 TO            &B9 TRUE +delim   &BA USR           &BB VAL
+   &BC VPOS +delim   &BD CHR$          &BE GET$          &BF INKEY$
+   &C0 LEFT$(        &C1 MID$(         &C2 RIGHT$(       &C3 STR$
+   &C4 STRING$(      &C5 EOF +delim    &C6 SUM           &C7 WHILE
+   &C8 CASE          &C9 WHEN          &CA OF +delim     &CB ENDCASE +delim
+   &CC OTHERWISE     &CD ENDIF +delim  &CE ENDWHILE +delim
+   &CF PTR  (left)   &D0 PAGE (left)   &D1 TIME (left)   &D2 LOMEM (left)
+   &D3 HIMEM (left)  &D4 SOUND         &D5 BPUT +delim   &D6 CALL
+   &D7 CHAIN         &D8 CLEAR +delim  &D9 CLOSE +delim  &DA CLG +delim
+   &DB CLS +delim    &DC DATA          &DD DEF           &DE DIM
+   &DF DRAW          &E0 END +delim    &E1 ENDPROC +delim &E2 ENVELOPE
+   &E3 FOR           &E4 GOSUB         &E5 GOTO          &E6 GCOL
+   &E7 IF            &E8 INPUT         &E9 LET           &EA LOCAL
+   &EB MODE          &EC MOVE          &ED NEXT          &EE ON
+   &EF VDU           &F0 PLOT          &F1 PRINT         &F2 PROC
+   &F3 READ          &F4 REM           &F5 REPEAT        &F6 REPORT +delim
+   &F7 RESTORE       &F8 RETURN +delim &F9 RUN +delim    &FA STOP +delim
+   &FB COLOUR / COLOR (both spellings) &FC TRACE         &FD UNTIL
+   &FE WIDTH         &FF OSCLI
+   Notes: "TAB(", "INSTR(", "POINT(", "LEFT$(", "MID$(", "RIGHT$(",
+   "STRING$(" include the opening bracket in the token.  TOP is not a
+   keyword: it is the token TO followed by the letter "P".
+   &0E (PUT) was &CE in v3; &CE is now ENDWHILE.                           *)
+                                          (* src: MAIN.Z80:KEYWDS; EXEC.Z80:CMDTAB;
+                                             EVAL.Z80:FUNTBL *)
+
+(* ---- 2.4 Names and variables ---------------------------------------- *)
+
+static-variable = ( upper | "@" ) "%" ;
+    (* A%..Z% and @%.  Only static if the character after "%" is not "(";
+       "A%(" is a dynamic array named A%.                                  *)
+                                          (* src: MAIN.Z80:LOCATE *)
+
+name           = name-start { name-char } [ type-suffix ] ;
+name-start     = upper | "_" | "`" | lower ;
+    (* "@" alone is not a valid first character (only in @%).
+       The name may not start with a keyword spelling (see 2.2).           *)
+type-suffix    = "%"        (* 32-bit integer                *)
+               | "&"        (* unsigned 8-bit byte (v5)      *)
+               | "$" ;      (* string                        *)
+    (* no suffix = 40-bit floating point *)
+                                          (* src: MAIN.Z80:LOCATE, LOC0, TYPE,
+                                             CREATE, RANGE *)
+
+proc-name      = name-char { name-char } [ type-suffix ] ;
+    (* Name after FN/PROC.  Must follow FN/PROC immediately (no space).
+       QUIRK: GETDEF only requires the first character to be a name-char,
+       so it may be a digit (PROC1, FN2...).                               *)
+                                          (* src: MAIN.Z80:GETDEF *)
+
+(* ---- 2.5 Numeric constants ------------------------------------------ *)
+
+decimal-constant = ( digit { digit } [ "." { digit } ] | "." { digit } )
+                   [ "E" [ "+" | "-" ] digit { digit } ] ;
+    (* "E" upper case only; spaces are skipped before the exponent sign.
+       More than 3 exponent digits forces "Exponent range".                *)
+                                          (* src: EVAL.Z80:CON; MATH.Z80:CON,
+                                             NUMBER, GETEXP, SIGNQ *)
+hex-constant   = "&" hex-digit { hex-digit } ;   (* at least one digit,
+                                                    else "Bad hex or binary" *)
+                                          (* src: EVAL.Z80:HEX *)
+binary-constant = "%" bin-digit { bin-digit } ;  (* v5 *)
+                                          (* src: EVAL.Z80:BIN *)
+
+(* ---- 2.6 String constants ------------------------------------------- *)
+
+string-literal = '"' { string-char | '""' } '"' ;
+    (* "" inside a string is one quote character.  A string must close
+       before EOL ("Missing "").                                           *)
+string-char    = ? any character except '"' and EOL ? ;
+                                          (* src: EVAL.Z80:CONS, CONS2 *)
+
+raw-text       = { ? any character except EOL ? } ;   (* untokenised *)
+
+
+(* ======================================================================
+   3. PROGRAM AND LINE STRUCTURE
+   ====================================================================== *)
+
+program        = { program-line } ;
+program-line   = line-number statement-list EOL ;
+    (* Stored as: length byte, line number (2 bytes LE), tokenised text,
+       &0D.  A zero length byte terminates the program.                    *)
+                                          (* src: MAIN.Z80:NOTCMD, ATEND *)
+
+input-line     = command                                (* direct only *)
+               | line-number EOL                        (* delete line *)
+               | line-number statement-list EOL         (* store line  *)
+               | [ "0" ] statement-list EOL ;           (* execute now *)
+    (* Commands are recognised only at the very start of the input
+       buffer (no leading spaces) and only when AUTO is not active.        *)
+                                          (* src: MAIN.Z80:CLOOP, NOTCMD *)
+
+statement-list = [ statement ] { ":" [ statement ] } ;
+    (* Empty statements and repeated ":" are allowed.
+       QUIRK: the dispatcher (XEQ) does not require ":" between
+       statements -- after any handler that returns to XEQ without
+       checking for a terminator the next token is simply dispatched, e.g.
+       "CLS PRINT" and "REPEAT PRINT X" work.  The tokeniser only enters
+       left mode after ":", THEN, ELSE, REPEAT, ERROR, so PTR/PAGE/TIME/
+       LOMEM/HIMEM assignments need one of those before them.             *)
+                                          (* src: EXEC.Z80:XEQ, XEQ1 *)
+
+terminator     = ":" | "ELSE" | EOL ;
+    (* What TERMQ treats as "end of statement".                            *)
+                                          (* src: EXEC.Z80:TERMQ *)
+
+(* Statements that must be the FIRST token of a program line (they are
+   found by scanning byte 3 of each line): DEF, DATA (for READ),
+   WHEN, OTHERWISE, ENDCASE (CASE), ELSE, ENDIF (multi-line IF).           *)
+                                          (* src: EXEC.Z80:SEARCH, DSRCH,
+                                             NSCAN, XEQ0 *)
+
+
+(* ======================================================================
+   4. IMMEDIATE-MODE COMMANDS
+   (matched against the separate COMNDS table on the raw, untokenised
+    input; abbreviations with "." work; spelled in upper case only)
+   ====================================================================== *)
+
+command        = auto-cmd | delete-cmd | list-cmd | listo-cmd | load-cmd
+               | new-cmd | old-cmd | renumber-cmd | save-cmd ;
+                                          (* src: MAIN.Z80:COMNDS, CMDTAB *)
+
+auto-cmd       = "AUTO" [ line-number ] [ sep-char [ line-number ] ] ;
+    (* defaults 10,10; increment stored as one byte; 0 -> "Silly"           *)
+                                          (* src: MAIN.Z80:AUTO, PAIR *)
+delete-cmd     = "DELETE" [ line-number ] [ sep-char [ line-number ] ] ;
+                                          (* src: MAIN.Z80:DELETE, DLPAIR *)
+list-cmd       = "LIST" [ line-number ] [ sep-char [ line-number ] ]
+                 [ "IF" raw-text ] ;
+    (* The rest of the line is tokenised first, so the IF text is matched
+       against tokenised program text.                                     *)
+                                          (* src: MAIN.Z80:LIST, DLPAIR *)
+listo-cmd      = "LISTO" expression ;     (* "LIST" immediately followed by O *)
+                                          (* src: MAIN.Z80:LISTO *)
+load-cmd       = "LOAD" expression ;      (* string; NB evaluated on raw text *)
+                                          (* src: MAIN.Z80:LOAD *)
+new-cmd        = "NEW" ;                  (* +delim *)
+                                          (* src: MAIN.Z80:NEW *)
+old-cmd        = "OLD" ;                  (* +delim *)
+                                          (* src: MAIN.Z80:OLD *)
+renumber-cmd   = "RENUMBER" [ line-number ] [ sep-char [ line-number ] ] ;
+                                          (* src: MAIN.Z80:RENUM, PAIR *)
+save-cmd       = "SAVE" expression ;      (* string *)
+                                          (* src: MAIN.Z80:SAVE *)
+sep-char       = ? any single character, normally "," ? ;
+    (* PAIR/DLPAIR just skip one character after the first number.        *)
+
+
+(* ======================================================================
+   5. STATEMENTS (alphabetical)
+   ====================================================================== *)
+
+statement      = assembler-block | assignment | bput-stmt | call-stmt
+               | case-stmt | chain-stmt | circle-stmt | clear-stmt
+               | clg-stmt | close-stmt | cls-stmt | colour-stmt | data-stmt
+               | def-stmt | dim-stmt | draw-stmt | ellipse-stmt | else-stmt
+               | end-stmt | endcase-stmt | endif-stmt | endproc-stmt
+               | endwhile-stmt | envelope-stmt | error-stmt | exit-stmt
+               | fill-stmt | fn-return | for-stmt | gcol-stmt | gosub-stmt
+               | goto-stmt | himem-stmt | if-stmt | input-stmt
+               | input-file-stmt | install-stmt | let-stmt | line-stmt
+               | local-stmt | lomem-stmt | mode-stmt | mouse-stmt
+               | move-stmt | next-stmt | off-stmt | on-stmt | origin-stmt
+               | oscli-stmt | otherwise-stmt | page-stmt | plot-stmt
+               | print-stmt | print-file-stmt | proc-stmt | ptr-stmt
+               | put-stmt | quit-stmt | read-stmt | rectangle-stmt
+               | rem-stmt | repeat-stmt | report-stmt | restore-stmt
+               | return-stmt | run-stmt | sound-stmt | star-command
+               | stop-stmt | substring-assignment | swap-stmt | sys-stmt
+               | time-stmt | tint-stmt | trace-stmt | until-stmt
+               | vdu-stmt | wait-stmt | when-stmt | while-stmt
+               | width-stmt ;
+    (* Dispatch: tokens &C0-&FF and &00-&10 via CMDTAB; &80-&BF via EXTRAS
+       (only ELSE, ERROR, LINE, OFF are statements; others give "Syntax
+       error"); characters &11-&7F via LET0 ("*", "=", "[", else implied
+       LET).                                                               *)
+                                          (* src: EXEC.Z80:XEQ1, CMDTAB, EXTRAS,
+                                             LET0 *)
+
+(* ---- [ ... ] inline assembler --------------------------------------- *)
+assembler-block = "[" asm-text "]" ;
+    (* May span several program lines; statements after "]" on the same
+       line are executed as BASIC.  See section 8.                         *)
+                                          (* src: EXEC.Z80:LET0, ASM, ASM0 *)
+
+(* ---- Assignment / LET ------------------------------------------------ *)
+let-stmt       = "LET" assignment ;       (* src: EXEC.Z80:LET *)
+
+assignment     = scalar-assignment | array-assignment ;
+                                          (* src: EXEC.Z80:LET0, LET, ASSIGN *)
+
+scalar-assignment = variable assign-op expression ;
+    (* Numeric variable: expression must be numeric (EXPRN), result is
+       converted to the variable type.  String variable: string expression;
+       compound operator "+" concatenates.
+       The variable is created if it does not exist.                      *)
+                                          (* src: EXEC.Z80:ASSIGN, MODIFY, MODIFS *)
+
+assign-op      = "=" | compound-op "=" ;
+compound-op    = "+" | "-" | "*" | "/" | "AND" | "OR" | "EOR" | "DIV"
+               | "MOD" | "^" ;
+    (* v5 compound assignment.  QUIRK: ASSIGN accepts ANY single byte
+       before "=" (spaces allowed on both sides of it) and MODIFY selects
+       the arithmetic operation from the low 4 bits of that byte, so the
+       list above is the meaningful subset, not the accepted set.
+       For strings any operator other than "+" behaves as plain "=".      *)
+                                          (* src: EXEC.Z80:ASSIGN, EQUALS, MODIFY,
+                                             MODIFS *)
+
+array-assignment = whole-array assign-op array-expression ;
+                                          (* src: EVAL.Z80:LETARR, EXPRA *)
+
+(* ---- BPUT ------------------------------------------------------------ *)
+bput-stmt      = "BPUT" channel "," expression [ ";" ] ;
+    (* Numeric: writes one byte.  String: writes the bytes followed by LF
+       unless ";" follows (v5).                                            *)
+                                          (* src: EXEC.Z80:BPUT, BPUTS *)
+
+channel        = "#" item ;               (* src: EXEC.Z80:CHANEL, CHNL *)
+
+(* ---- CALL ------------------------------------------------------------ *)
+call-stmt      = "CALL" expression { "," variable-or-array } ;
+    (* Parameters may be any variable incl. whole arrays (v5); they are
+       created if absent.                                                  *)
+                                          (* src: EXEC.Z80:CALL, CALL1 *)
+
+(* ---- CASE ... WHEN ... OTHERWISE ... ENDCASE (v5) ------------------- *)
+case-stmt      = "CASE" expression "OF" EOL
+                 { program-line }
+                 { when-line { program-line } }
+                 [ otherwise-line { program-line } ]
+                 endcase-line ;
+    (* "OF" must be the last byte of the line: even a trailing space gives
+       "OF not last".  WHEN/OTHERWISE/ENDCASE lines are found by scanning
+       for those tokens as the first token of a line; nested CASE is
+       recognised by a line ending in OF.                                  *)
+                                          (* src: EXEC.Z80:CASE, CASE0..CASE9,
+                                             NSCAN1 *)
+when-line      = line-number "WHEN" expression { "," expression }
+                 [ ":" ] [ statement-list ] EOL ;
+    (* Expressions are compared with the CASE value (numeric or string)
+       left to right; after a match the remaining ones are evaluated and
+       discarded.  The ":" is not checked (see statement-list QUIRK).      *)
+otherwise-line = line-number "OTHERWISE" [ statement-list ] EOL ;
+endcase-line   = line-number "ENDCASE" [ statement-list ] EOL ;
+
+when-stmt      = "WHEN" { ? rest of line ? } ;
+otherwise-stmt = "OTHERWISE" { ? rest of line ? } ;
+    (* Reached by sequential execution (end of the selected clause) at the
+       start of a line: skip to the matching ENDCASE.  Anywhere else WHEN,
+       OTHERWISE and OF give "Syntax error".                               *)
+                                          (* src: EXEC.Z80:XEQ0, WHEN; CMDTAB *)
+endcase-stmt   = "ENDCASE" ;              (* no-op; src: EXEC.Z80:CMDTAB (XEQ) *)
+
+(* ---- CHAIN ----------------------------------------------------------- *)
+chain-stmt     = "CHAIN" expression ;     (* string filename *)
+                                          (* src: EXEC.Z80:CHAIN *)
+
+(* ---- CIRCLE (v5 hook) ------------------------------------------------ *)
+circle-stmt    = "CIRCLE" [ "FILL" ] expression "," expression ","
+                 expression ;             (* x,y,r *)
+                                          (* src: ACORN.Z80:CIRCLE *)
+
+(* ---- CLEAR / CLG / CLOSE / CLS --------------------------------------- *)
+clear-stmt     = "CLEAR" ;                (* src: EXEC.Z80:CLR *)
+clg-stmt       = "CLG" ;                  (* src: ACORN.Z80:CLG *)
+close-stmt     = "CLOSE" channel ;        (* src: EXEC.Z80:CLOSE *)
+cls-stmt       = "CLS" ;                  (* src: EXEC.Z80:CLS *)
+
+(* ---- COLOUR / COLOR -------------------------------------------------- *)
+colour-stmt    = ( "COLOUR" | "COLOR" ) expression
+                 [ "," expression [ "," expression "," expression ] ] ;
+    (* COLOUR n | COLOUR n,p | COLOUR n,r,g,b *)
+                                          (* src: ACORN.Z80:COLOUR, PALCOL *)
+
+(* ---- DATA ------------------------------------------------------------ *)
+data-stmt      = "DATA" raw-text ;
+    (* Ignored when executed (as REM).  For READ, DATA must be the first
+       token of its line; its raw text is parsed as
+         data-list = data-item { "," data-item } ;
+         data-item = string-literal | ? raw text up to "," or EOL ? ;
+       Numeric items are evaluated with the expression evaluator on the
+       untokenised text (so keywords/functions are not usable there).
+       UNSURE: a ":" met by READ where it expects a separator makes it skip
+       to the end of that DATA line (REFIL1 is called with B undefined).   *)
+                                          (* src: EXEC.Z80:CMDTAB (REM), READ0,
+                                             XTRACT, DSRCH *)
+
+(* ---- DEF ------------------------------------------------------------- *)
+def-stmt       = "DEF" ( "PROC" | "FN" ) proc-name
+                 [ "(" formal-param { "," formal-param } ")" ]
+                 statement-list ;
+    (* DEF must be the first token of its line.  Spaces may separate DEF
+       from PROC/FN; none between PROC/FN and the name.  Executing DEF
+       skips the rest of the line; a call starts executing after the
+       parameter list.  An FN body ends with an fn-return statement.       *)
+                                          (* src: EXEC.Z80:CMDTAB (REM), PROC1,
+                                             PROC2, SAVLOC; MAIN.Z80:GETDEF *)
+formal-param   = [ "RETURN" ] variable-or-array ;
+    (* RETURN marks a by-reference (returned) parameter (v5); whole arrays
+       are passed by reference (v5).                                       *)
+                                          (* src: EXEC.Z80:SAVLOC, ARGUE, SAVRET *)
+
+(* ---- DIM ------------------------------------------------------------- *)
+dim-stmt       = "DIM" dim-item { "," dim-item } ;
+                                          (* src: EXEC.Z80:DIM, DIM7 *)
+dim-item       = array-name "(" expression { "," expression } ")"
+               | dim-block ;
+    (* Array form: name immediately followed by "(" and not already
+       dimensioned (or declared LOCAL: then it is created on the stack,
+       v5).  A global array may be DIMmed inside a FN/PROC (v5).          *)
+                                          (* src: EXEC.Z80:DIM, DIM1, DIM3 *)
+dim-block      = variable [ "LOCAL" ] expression ;
+    (* Reserve expression+1 bytes and store the address in the (numeric,
+       non-byte, non-array) variable.  "LOCAL" reserves on the stack (v5);
+       "DIM v LOCAL -1" returns the stack pointer.  A leading "!" (e.g.
+       DIM !p 100) is accepted.                                            *)
+                                          (* src: EXEC.Z80:DIM4, DIM8 *)
+
+(* ---- DRAW / MOVE / FILL / PLOT --------------------------------------- *)
+draw-stmt      = "DRAW" [ "BY" ] expression "," expression ;
+                                          (* src: ACORN.Z80:DRAW, PLOT1 *)
+move-stmt      = "MOVE" [ "BY" ] expression "," expression ;
+                                          (* src: ACORN.Z80:MOVE, PLOT1 *)
+fill-stmt      = "FILL" [ "BY" ] expression "," expression ;   (* v5 hook *)
+                                          (* src: ACORN.Z80:FILL, PLOT1 *)
+plot-stmt      = "PLOT" ( "BY" expression "," expression
+                        | expression "," expression [ "," expression ] ) ;
+    (* PLOT x,y (=PLOT 69,x,y) | PLOT n,x,y | PLOT BY x,y *)
+                                          (* src: ACORN.Z80:PLOT *)
+
+(* ---- ELLIPSE (v5 hook) ----------------------------------------------- *)
+ellipse-stmt   = "ELLIPSE" [ "FILL" ] expression "," expression ","
+                 expression "," expression ;     (* x,y,a,b *)
+                                          (* src: ACORN.Z80:ELLIPS *)
+
+(* ---- ELSE ------------------------------------------------------------ *)
+else-stmt      = "ELSE" { ? rest of line ? } ;
+    (* Met during execution: inside a line it ends the THEN part (rest of
+       line skipped); as first token of a line it ends the THEN part of a
+       multi-line IF (skip to matching ENDIF).                             *)
+                                          (* src: EXEC.Z80:EXTRAS (REM), XEQ0, MELSE *)
+
+(* ---- END / ENDPROC / ENDIF / ENDWHILE -------------------------------- *)
+end-stmt       = "END" ;                  (* src: EXEC.Z80:END *)
+endproc-stmt   = "ENDPROC" ;              (* src: EXEC.Z80:ENDPRO *)
+endif-stmt     = "ENDIF" ;                (* no-op; src: EXEC.Z80:CMDTAB (XEQ) *)
+endwhile-stmt  = "ENDWHILE" ;             (* src: EXEC.Z80:ENDWHI *)
+
+(* ---- ENVELOPE -------------------------------------------------------- *)
+envelope-stmt  = "ENVELOPE" expression 13 * ( "," expression ) ;
+    (* exactly 14 numeric arguments *)
+                                          (* src: ACORN.Z80:ENVEL *)
+
+(* ---- ERROR (v5) ------------------------------------------------------ *)
+error-stmt     = "ERROR" expression "," expression ;   (* number, message$ *)
+                                          (* src: EXEC.Z80:THROW *)
+
+(* ---- EXIT (v5) ------------------------------------------------------- *)
+exit-stmt      = "EXIT" ( "FOR" [ variable ] | "REPEAT" | "WHILE" ) ;
+    (* Leaves the innermost (or the named FOR) loop and continues after
+       its NEXT / UNTIL expr / ENDWHILE.                                   *)
+                                          (* src: EXEC.Z80:EXIT, EXIT0..EXIT8 *)
+
+(* ---- = (FN result) --------------------------------------------------- *)
+fn-return      = "=" expression ;
+                                          (* src: EXEC.Z80:LET0, FNEND *)
+
+(* ---- FOR ------------------------------------------------------------- *)
+for-stmt       = "FOR" variable assign-op expression "TO" expression
+                 [ "STEP" expression ] ;
+    (* Control variable must be a numeric scalar ("FOR variable").
+       QUIRK: FOR uses ASSIGN, so a compound operator ("FOR I+=1 TO 5")
+       is accepted.                                                        *)
+                                          (* src: EXEC.Z80:FOR, ASSIGN *)
+
+(* ---- GCOL ------------------------------------------------------------ *)
+gcol-stmt      = "GCOL" expression [ "," expression ] ;   (* [a,]b *)
+                                          (* src: ACORN.Z80:GCOL *)
+
+(* ---- GOSUB / GOTO / RETURN ------------------------------------------- *)
+gosub-stmt     = "GOSUB" item ;
+goto-stmt      = "GOTO" item ;
+    (* The target is an ITEM, normally a line-ref; a computed target needs
+       brackets: GOTO (n*10).  Must be followed by a terminator.          *)
+                                          (* src: EXEC.Z80:GOSUB, GOTO, GOTO1 *)
+return-stmt    = "RETURN" ;               (* src: EXEC.Z80:RETURN *)
+
+(* ---- HIMEM / LOMEM / PAGE / PTR / TIME pseudo-variable assignment --- *)
+himem-stmt     = "HIMEM" "=" expression ; (* src: EXEC.Z80:HIMEMV *)
+lomem-stmt     = "LOMEM" "=" expression ; (* src: EXEC.Z80:LOMEMV *)
+page-stmt      = "PAGE" "=" expression ;  (* src: EXEC.Z80:PAGEV *)
+ptr-stmt       = "PTR" channel "=" expression ;
+                                          (* src: EXEC.Z80:PTR *)
+time-stmt      = "TIME" "=" expression
+               | "TIME" "$" "=" expression ;   (* TIME$ via OS hook *)
+                                          (* src: EXEC.Z80:TIMEV, TIMEVS *)
+    (* These use the "left" tokens &CF-&D3; only "=" is accepted (no
+       compound operators).                                                *)
+
+(* ---- IF -------------------------------------------------------------- *)
+if-stmt        = single-line-if | multi-line-if ;
+                                          (* src: EXEC.Z80:IF *)
+
+single-line-if = "IF" expression
+                 ( "THEN" { ";" } then-part | statement-list )
+                 [ "ELSE" then-part ] ;
+    (* Without THEN the statements follow directly (no line number).  When
+       the condition is false, the rest of the line is scanned (skipping
+       strings, stopping at REM) for the first ELSE token.  When true,
+       execution of the THEN part stops at ELSE (rest of line skipped).  *)
+                                          (* src: EXEC.Z80:IF, IF0, IF1, IFNOT,
+                                             IFNEXT *)
+then-part      = line-ref | statement-list ;
+                                          (* src: EXEC.Z80:IF1 *)
+
+multi-line-if  = "IF" expression "THEN" { ";" } EOL
+                 { program-line }
+                 [ multi-else-line { program-line } ]
+                 endif-line ;
+    (* v5.  THEN (or THEN followed by ";"s) must be the last byte of the
+       line.  QUIRK: a trailing space after THEN makes the false branch
+       treat it as a single-line IF.  Nesting is counted by lines whose
+       last byte is THEN; ELSE/ENDIF must be the first token of a line.   *)
+                                          (* src: EXEC.Z80:IFTHEN, IFELSE, NSCAN,
+                                             MELSE *)
+multi-else-line = line-number "ELSE" [ statement-list ] EOL
+               | line-number "ELSE" "IF" expression "THEN" ";" { ";" } EOL ;
+    (* ELSE IF cond THEN; (trailing semicolon, v5) chains another
+       condition onto the SAME IF..ENDIF block without a further ENDIF;
+       without the ";" a nested multi-line IF (needing its own ENDIF) is
+       started.  Can be repeated.                                          *)
+                                          (* src: EXEC.Z80:IFELSE, IFTHEN *)
+endif-line     = line-number "ENDIF" [ statement-list ] EOL ;
+
+(* ---- INPUT ----------------------------------------------------------- *)
+input-stmt     = "INPUT" [ "LINE" ] { input-item } ;
+input-item     = "," | ";"                (* reset "? " prompt          *)
+               | string-literal           (* prompt (literal only)      *)
+               | "'" | spc-clause | tab-clause
+               | variable ;
+    (* Items need not be separated.  A prompt string suppresses the "?". *)
+                                          (* src: EXEC.Z80:INPUT, INPUT0..INPUT9,
+                                             FORMAT *)
+input-file-stmt = "INPUT" channel { "," variable } ;
+                                          (* src: EXEC.Z80:INPUTN, INPN1 *)
+
+(* ---- INSTALL --------------------------------------------------------- *)
+install-stmt   = "INSTALL" ;
+    (* Token reserved; always "Syntax error" in this version.             *)
+                                          (* src: EXEC.Z80:CMDTAB (SYNTAX) *)
+
+(* ---- LEFT$( / MID$( / RIGHT$( = (v5) ---------------------------------- *)
+substring-assignment
+               = "LEFT$(" string-variable [ "," expression ] ")" "=" expression
+               | "MID$(" string-variable "," expression [ "," expression ] ")"
+                 "=" expression
+               | "RIGHT$(" string-variable [ "," expression ] ")" "="
+                 expression ;
+    (* Overwrites part of the string in place; length never changes.
+       Only "=" (no compound operator).                                    *)
+                                          (* src: EXEC.Z80:LEFTSL, MIDSL, RITESL,
+                                             GETSTR, MIDSL1 *)
+
+(* ---- LINE (graphics) ------------------------------------------------- *)
+line-stmt      = "LINE" expression "," expression "," expression ","
+                 expression ;             (* x1,y1,x2,y2 (v5 hook) *)
+                                          (* src: EXEC.Z80:EXTRAS; ACORN.Z80:LINE *)
+
+(* ---- LOCAL ----------------------------------------------------------- *)
+local-stmt     = "LOCAL" ( "DATA"
+                         | "ERROR"
+                         | variable-or-array { "," variable-or-array } ) ;
+    (* LOCAL DATA saves the DATA pointer (v5).  LOCAL var: only inside a
+       FN/PROC; whole arrays may be made LOCAL (v5) and then DIMmed.
+       QUIRK/UNSURE: "LOCAL ERROR" just skips the ERROR token and saves
+       nothing (error state is saved by ON ERROR LOCAL instead).          *)
+                                          (* src: EXEC.Z80:LOCAL, LOCDAT, LOCERR,
+                                             LOCAL2, LOCAL4 *)
+
+(* ---- MODE / MOUSE / OFF / ORIGIN ------------------------------------- *)
+mode-stmt      = "MODE" expression ;      (* src: ACORN.Z80:MODE *)
+mouse-stmt     = "MOUSE" variable "," variable "," variable ;   (* x,y,b *)
+                                          (* src: ACORN.Z80:MOUSE *)
+off-stmt       = "OFF" ;                  (* cursor off; src: EXEC.Z80:EXTRAS -> CSROFF *)
+origin-stmt    = "ORIGIN" expression "," expression ;
+                                          (* src: ACORN.Z80:ORIGIN *)
+
+(* ---- NEXT ------------------------------------------------------------ *)
+next-stmt      = "NEXT" [ variable ] { "," [ variable ] } ;
+    (* Each comma closes a further loop.                                   *)
+                                          (* src: EXEC.Z80:NEXT, NEXT2 *)
+
+(* ---- ON -------------------------------------------------------------- *)
+on-stmt        = "ON"                                       (* cursor on *)
+               | "ON" "ERROR" [ "LOCAL" ] ( "OFF" | statement-list )
+               | "ON" expression ( "GOTO" | "GOSUB" ) item { "," item }
+                 [ "ELSE" then-part ]
+               | "ON" expression "PROC" proc-call-tail
+                 { [ "," ] "PROC" proc-call-tail }
+                 [ "ELSE" then-part ] ;
+    (* ON with nothing following: cursor on.  ON ERROR: the rest of the
+       line is the error handler; LOCAL (v5) saves the previous handler
+       until the FN/PROC returns or RESTORE ERROR.  ON...GOTO/GOSUB items
+       are counted by commas; ON...PROC alternatives are counted by PROC
+       tokens.  Out of range and no ELSE gives "ON range".               *)
+                                          (* src: EXEC.Z80:ON, ONERR, ONERR1, ON1..ON5,
+                                             ONPROC *)
+
+(* ---- OSCLI / * ------------------------------------------------------- *)
+oscli-stmt     = "OSCLI" expression ;     (* string *)
+                                          (* src: EXEC.Z80:CLI *)
+star-command   = "*" raw-text ;           (* passed to OSCLI; left mode only *)
+                                          (* src: EXEC.Z80:LET0, EXT;
+                                             MAIN.Z80:LEXAN7 *)
+
+(* ---- PRINT ----------------------------------------------------------- *)
+print-stmt     = "PRINT" { print-item } ;
+print-item     = "~"                      (* following numbers in hex      *)
+               | ";"                      (* no field padding / no newline *)
+               | ","                      (* next @% field                 *)
+               | "'" | spc-clause | tab-clause
+               | expression ;
+    (* Items need not be separated.  A newline is printed unless the last
+       item was ";".                                                       *)
+                                          (* src: EXEC.Z80:PRINT0, PRINTC, PRINT3,
+                                             PRINT4, FORMAT *)
+print-file-stmt = "PRINT" channel { "," expression } ;
+                                          (* src: EXEC.Z80:PRINT, PRNTN1 *)
+spc-clause     = "SPC" item ;             (* src: EXEC.Z80:DOSPC *)
+tab-clause     = "TAB(" expression [ "," expression ] ")" ;
+                                          (* src: EXEC.Z80:DOTAB, DOTAB1 *)
+
+(* ---- PROC call ------------------------------------------------------- *)
+proc-stmt      = "PROC" proc-call-tail ;
+proc-call-tail = proc-name [ "(" actual-param { "," actual-param } ")" ] ;
+    (* No space between PROC and name; a space is allowed before "(".     *)
+                                          (* src: EXEC.Z80:PROC, PROC1, PROC4 *)
+actual-param   = expression | whole-array | variable ;
+    (* whole-array for array formals; a variable (not an expression) for
+       RETURN formals (v5).                                                *)
+                                          (* src: EXEC.Z80:ARGUE, ARGUE3, SAVRET *)
+
+(* ---- PUT (Z80 port output) ------------------------------------------- *)
+put-stmt       = "PUT" expression "," expression ;    (* port, data *)
+                                          (* src: EXEC.Z80:PUT *)
+
+(* ---- QUIT (v5) ------------------------------------------------------- *)
+quit-stmt      = "QUIT" ;                 (* src: EXEC.Z80:CMDTAB -> BYE *)
+
+(* ---- READ ------------------------------------------------------------ *)
+read-stmt      = "READ" variable { "," variable }
+               | "READ" channel { "," variable } ;     (* = INPUT# *)
+                                          (* src: EXEC.Z80:READ, READ0, INPUTN *)
+
+(* ---- RECTANGLE (v5 hook) --------------------------------------------- *)
+rectangle-stmt = "RECTANGLE" [ "FILL" ] expression "," expression ","
+                 expression [ "," expression ]
+                 [ "TO" expression "," expression ] ;
+    (* x,y,w[,h] [TO newx,newy] (block copy/move) *)
+                                          (* src: ACORN.Z80:RECTAN, RECTTO *)
+
+(* ---- REM ------------------------------------------------------------- *)
+rem-stmt       = "REM" raw-text ;         (* src: EXEC.Z80:REM *)
+
+(* ---- REPEAT / UNTIL -------------------------------------------------- *)
+repeat-stmt    = "REPEAT" ;
+    (* Body follows; a statement may follow REPEAT directly without ":". *)
+                                          (* src: EXEC.Z80:REPEAT *)
+until-stmt     = "UNTIL" expression ;     (* src: EXEC.Z80:UNTIL, UNTIL1 *)
+
+(* ---- REPORT ---------------------------------------------------------- *)
+report-stmt    = "REPORT" ;               (* src: EXEC.Z80:REPOR *)
+
+(* ---- RESTORE --------------------------------------------------------- *)
+restore-stmt   = "RESTORE" [ item                      (* line          *)
+                           | "+" expression            (* +n lines (v5) *)
+                           | "DATA"                    (* v5            *)
+                           | "ERROR"                   (* v5            *)
+                           | "LOCAL" ] ;               (* v5            *)
+    (* RESTORE DATA / ERROR undo LOCAL DATA / ON ERROR LOCAL; RESTORE
+       LOCAL restores LOCAL variables without leaving the FN/PROC.        *)
+                                          (* src: EXEC.Z80:RESTOR, RESDEL, RESREL *)
+
+(* ---- RUN ------------------------------------------------------------- *)
+run-stmt       = "RUN" [ expression ] ;
+    (* QUIRK: "RUN filename$" falls through into CHAIN.                    *)
+                                          (* src: EXEC.Z80:RUN *)
+
+(* ---- SOUND ----------------------------------------------------------- *)
+sound-stmt     = "SOUND" expression "," expression "," expression ","
+                 expression ;
+                                          (* src: ACORN.Z80:SOUND *)
+
+(* ---- STOP ------------------------------------------------------------ *)
+stop-stmt      = "STOP" ;                 (* src: EXEC.Z80:STOP *)
+
+(* ---- SWAP (v5) ------------------------------------------------------- *)
+swap-stmt      = "SWAP" variable-or-array "," variable-or-array ;
+    (* Both must exist and have identical types (whole arrays allowed).  *)
+                                          (* src: EXEC.Z80:SWAP *)
+
+(* ---- SYS / TINT (v5 hooks) ------------------------------------------- *)
+sys-stmt       = "SYS" { ? rest of statement ? } ;
+tint-stmt      = "TINT" { ? rest of statement ? } ;
+    (* UNSURE: no implementation in this source tree (HOOK.Z80 and
+       ACORN.Z80 both raise "Sorry"), so their argument syntax is
+       undefined here.                                                     *)
+                                          (* src: ACORN.Z80:SYS, TINT; HOOK.Z80 *)
+
+(* ---- TRACE ----------------------------------------------------------- *)
+trace-stmt     = "TRACE" ( "ON" | "OFF" | expression ) ;
+    (* TRACE n traces lines below n.                                       *)
+                                          (* src: EXEC.Z80:TRACE *)
+
+(* ---- VDU ------------------------------------------------------------- *)
+vdu-stmt       = "VDU" vdu-item { vdu-item } ;
+vdu-item       = expression { "|" } [ "," | ";" ] ;
+    (* "," sends one byte, ";" sends two (LSB first), "|" sends 9 zero
+       bytes (v5).  Separators are optional between expressions.          *)
+                                          (* src: EXEC.Z80:VDU, VDU1..VDU4 *)
+
+(* ---- WAIT (v5 hook) -------------------------------------------------- *)
+wait-stmt      = "WAIT" [ expression ] ;  (* centiseconds *)
+                                          (* src: ACORN.Z80:WAIT *)
+
+(* ---- WHILE / ENDWHILE (v5) ------------------------------------------- *)
+while-stmt     = "WHILE" expression ;
+    (* If false, skip forward to the matching ENDWHILE (found anywhere,
+       outside strings/REM/DATA; nested WHILE counted; "EXIT WHILE" not
+       counted).                                                           *)
+                                          (* src: EXEC.Z80:WHILE, WSRCH *)
+
+(* ---- WIDTH ----------------------------------------------------------- *)
+width-stmt     = "WIDTH" expression ;     (* src: EXEC.Z80:WIDTHV *)
+
+
+(* ======================================================================
+   6. VARIABLES AND REFERENCES
+   ====================================================================== *)
+
+variable       = static-variable [ binary-indirection ]
+               | name [ subscripts ] [ binary-indirection ]
+               | unary-indirection ;
+    (* binary-indirection only on numeric variables/elements.             *)
+                                          (* src: MAIN.Z80:GETVAR, GETVX, GETVA *)
+
+subscripts     = "(" expression { "," expression } ")" ;
+    (* "(" must follow the name immediately.  Number of subscripts must
+       match the DIM.                                                      *)
+                                          (* src: MAIN.Z80:GETVAR, GETV3, GETV2 *)
+
+unary-indirection
+               = "?" item               (* byte at address              *)
+               | "!" item               (* 32-bit integer at address    *)
+               | "|" item               (* variant/float at address (v5) *)
+               | "$" item ;             (* CR-terminated string at address *)
+                                          (* src: MAIN.Z80:GETV4..GETV7, GETV0 *)
+binary-indirection
+               = "?" item               (* var?offset : byte            *)
+               | "!" item ;             (* var!offset : 32-bit          *)
+                                          (* src: MAIN.Z80:GETV8, GETV9, GETVA *)
+
+array-name     = name ;
+whole-array    = array-name "(" ")" ;     (* "()" with no space *)
+                                          (* src: MAIN.Z80:GETV1, PUTVAR *)
+variable-or-array = variable | whole-array ;
+string-variable = variable ;              (* must be of string type *)
+                                          (* src: EXEC.Z80:GETSTR *)
+
+
+(* ======================================================================
+   7. EXPRESSIONS
+   ====================================================================== *)
+
+(* Precedence (highest first), as implemented:
+
+   level  rule        operators                         assoc.     routine
+   -----  ----------  --------------------------------  ---------  -------
+     1    item        constants, variables, functions,  -          ITEM
+                      ( ), unary - + NOT ^(address-of)
+     2    expr-pow    ^                                 left       EXPR5
+     3    expr-mul    *  /  MOD  DIV                    left       EXPR4
+     4    expr-add    +  -   (+ is concatenation        left       EXPR3
+                      for strings)
+     5    expr-rel    =  ==  <>  <=  >=  <  >           NONE (at   EXPR2
+                      <<  >>  >>>                        most one)
+     6    expr-and    AND                               left       EXPR1
+     7    expr-or     OR  EOR                           left       EXPR
+
+   Notes from the code:
+   - Unary minus, unary plus and NOT (and every one-argument function)
+     apply to a single ITEM, so -2^2 = 4, NOT a=b means (NOT a)=b and
+     SIN x*2 means (SIN x)*2.
+   - Relational and shift operators share level 5 and are not repeated:
+     after one comparison/shift EXPR2 returns, so "a<b<c" or "a<<1<<2"
+     is not accepted as one expression.
+   - Strings: only "+" (level 4) and the relational operators (level 5)
+     are allowed; any other operator on a string gives "Type mismatch".
+     Shifts are numeric only.                                              *)
+                                          (* src: EVAL.Z80:EXPR comment block,
+                                             EXPR..EXPR5A *)
+
+expression     = expr-and { ( "OR" | "EOR" ) expr-and } ;
+                                          (* src: EVAL.Z80:EXPR, EXPR0A *)
+expr-and       = expr-rel { "AND" expr-rel } ;
+                                          (* src: EVAL.Z80:EXPR1, EXPR1A *)
+expr-rel       = expr-add [ ( rel-op | shift-op ) expr-add ] ;
+                                          (* src: EVAL.Z80:EXPR2, EXPR2S, SHIFT *)
+rel-op         = "=" | "==" | "<>" | "<=" | ">=" | "<" | ">"
+               | "><" | "=<" | "=>" ;
+    (* QUIRK: the two characters of a compound operator are summed, so the
+       reversed spellings "><", "=<", "=>" equal "<>", "<=", ">=", and
+       spaces are allowed between the two characters ("< =").  "==" is the
+       same as "=" (v5).                                                   *)
+                                          (* src: EVAL.Z80:EXPR2, RELOPQ, EXPR2B *)
+shift-op       = "<<" | ">>" | ">>>" | "<<<" ;
+    (* v5.  << left shift, >> arithmetic right, >>> logical right.
+       QUIRK: "<<<" is accepted and is the same as "<<".  A third
+       relational character other than a repeat gives "Syntax error".     *)
+                                          (* src: EVAL.Z80:SHIFT, SHIFT1;
+                                             MATH.Z80:ISHL, ISHX, ISAR, ISHR *)
+expr-add       = expr-mul { ( "+" | "-" ) expr-mul } ;
+                                          (* src: EVAL.Z80:EXPR3, EXPR3A, EXPR3S *)
+expr-mul       = expr-pow { ( "*" | "/" | "MOD" | "DIV" ) expr-pow } ;
+                                          (* src: EVAL.Z80:EXPR4, EXPR4A *)
+expr-pow       = item { "^" item } ;
+                                          (* src: EVAL.Z80:EXPR5, EXPR5A *)
+
+(* Type-restricted uses, for reference:
+     numeric-expression = expression ;  (* EXPRN: numeric else Type mismatch *)
+     integer-expression = expression ;  (* EXPRI: numeric, converted to int *)
+     string-expression  = expression ;  (* EXPRS: string else Type mismatch *) *)
+                                          (* src: EVAL.Z80:EXPRN, EXPRI, EXPRS *)
+
+item           = decimal-constant | hex-constant | binary-constant
+               | string-literal
+               | line-ref                 (* &8D token *)
+               | "(" expression ")"
+               | "-" item                 (* unary minus, numeric       *)
+               | "+" item                 (* unary plus, numeric        *)
+               | "^" variable-or-array    (* address-of (v5)            *)
+               | variable
+               | function ;
+    (* An undefined variable gives "No such variable", except during an
+       assembler pass with OPT bit 1 clear, where it yields P%.            *)
+                                          (* src: EVAL.Z80:ITEM, ITEM0, ITEM2,
+                                             MINUS, ITEMN, ADDROF, NOSUCH *)
+
+(* ---- Whole-array expressions (v5) ---------------------------------- *)
+array-expression
+               = array-term { array-op array-term }
+               | array-term "," expression { "," expression } ;
+    (* Strictly left to right, no precedence.  The second form is an
+       initialisation list (elements filled in order, the rest kept).  A
+       single non-array term is copied into every element.
+       String arrays: only plain copy / single string / list; no
+       arithmetic (see WHATSNEW).  EVAL of array expressions unsupported.  *)
+                                          (* src: EVAL.Z80:EXPRA, EXPRA1..EXPRA8 *)
+array-op       = "+" | "-" | "*" | "/" ;
+    (* QUIRK: any single byte is accepted; its low 4 bits select the
+       arithmetic operation (as for compound-op).                          *)
+                                          (* src: EVAL.Z80:EXPRA1, STOREA;
+                                             EXEC.Z80:MODIFY *)
+array-term     = [ "-" ] whole-array [ "." whole-array ]    (* "." = dot/matrix product *)
+               | [ "-" ] scalar-term ;
+    (* Unary "-" only on the first term.  Arrays must have the same
+       number of elements and the same type.
+       QUIRK: a scalar operand after "+" or "-" is parsed at the
+       multiplicative level (EXPR4), otherwise (first term, after "*",
+       "/") at the "^" level (EXPR5); the source comments "should be
+       EXP345".                                                            *)
+                                          (* src: EVAL.Z80:ITEMA, ITEMA1..ITEMA7,
+                                             EXPR45, ARRDOT *)
+scalar-term    = expr-mul | expr-pow ;    (* see QUIRK above *)
+
+
+(* ======================================================================
+   7a. FUNCTIONS AND PSEUDO-VARIABLES (all reached from ITEM)
+   ====================================================================== *)
+
+function       = numeric-function | string-function | pseudo-variable
+               | fn-call | array-function ;
+                                          (* src: EVAL.Z80:ITEM, DISPAT, FUNTBL,
+                                             EXTRAS *)
+
+(* One-argument numeric functions; argument is a single ITEM (so
+   "SIN(x)" and "SIN x" both work, but SIN x*2 = (SIN x)*2).             *)
+numeric-function
+               = ( "ABS" | "ACS" | "ASN" | "ATN" | "COS" | "DEG" | "EXP"
+                 | "INT" | "LN" | "LOG" | "NOT" | "RAD" | "SGN" | "SIN"
+                 | "SQR" | "TAN" ) item                (* FPPN -> ITEMN *)
+               | ( "ASC" | "LEN" | "VAL" ) item        (* string item   *)
+               | ( "OPENIN" | "OPENOUT" | "OPENUP" ) item   (* filename$ *)
+               | ( "USR" | "INKEY" ) item              (* integer item  *)
+               | "ADVAL" item                          (* hook          *)
+               | ( "BGET" | "EOF" | "EXT" | "PTR" ) channel
+               | "GET" [ "(" expression ")" ]          (* GET(n): port  *)
+               | "INSTR(" expression "," expression [ "," expression ] ")"
+               | "POINT(" expression "," expression ")"   (* hook        *)
+               | "RND" [ "(" expression ")" ]
+               | "EVAL" item ;                         (* string item,
+                                                          result numeric
+                                                          or string     *)
+                                          (* src: EVAL.Z80:ABS..ACS, FPPN, ASC, LEN,
+                                             VAL, OPENIN/OPENOT/OPENUP, USR, INKEY,
+                                             BGET, EOF, EXT, PTR, GET, INSTR, RND,
+                                             EVAL; EXEC.Z80:USR; ACORN.Z80:ADVAL,
+                                             POINT *)
+
+string-function
+               = "CHR$" item
+               | "GET$" [ channel [ ( "BY" | "TO" ) item ] ]
+                     (* GET$#f BY len / TO term (v5) *)
+               | "INKEY$" item
+               | "LEFT$(" expression [ "," expression ] ")"   (* n optional, v5 *)
+               | "MID$(" expression "," expression [ "," expression ] ")"
+               | "RIGHT$(" expression [ "," expression ] ")"  (* n optional, v5 *)
+               | "STR$" [ "~" ] item
+               | "STRING$(" expression "," expression ")"
+               | "REPORT" "$"                                  (* v5 *)
+               | "TIME" "$" ;                                  (* hook *)
+                                          (* src: EVAL.Z80:CHRS, GETS, GET2..GET9,
+                                             INKEYS, LEFTS, MIDS, RIGHTS, STRS,
+                                             HEXSTS, STRING, REPORS, TIMEVS *)
+
+pseudo-variable
+               = "COUNT" | "ERL" | "ERR" | "FALSE" | "TRUE" | "PI"
+               | "POS" | "VPOS" | "PAGE" | "LOMEM" | "HIMEM" | "TIME"
+               | "TO" "P"                 (* TOP: token TO + letter P *)
+               | "END"                    (* v5: address of free space *)
+               | "MODE" | "WIDTH"         (* v5 hooks *)
+               | "TINT" [ ? args ? ] ;    (* v5 hook; UNSURE: arguments
+                                             parsed by platform TINTFN *)
+                                          (* src: EVAL.Z80:COUNTV, ERLV, ERRV, ZERO,
+                                             TRUE, PI, POS, VPOS, PAGEV, LOMEMV,
+                                             HIMEMV, TIMEV, TOPV, ENDFUN, EXTRAS,
+                                             TINT *)
+
+fn-call        = "FN" proc-call-tail ;    (* same argument rules as PROC *)
+                                          (* src: EXEC.Z80:FN, PROC1 *)
+
+array-function
+               = "DIM" ( "(" whole-array [ "," expression ] ")"
+                       | whole-array [ "," expression ] )
+                     (* DIM(a()) = no. of dims, DIM(a(),n) = size of dim n *)
+               | "SUM" [ "LEN" ] array-arg  (* SUM, SUMLEN (v5) *)
+               | "MOD" array-arg ;          (* RMS modulus (v5) *)
+                                          (* src: EVAL.Z80:DIMFUN, DIMF0, SUM,
+                                             SUMLEN, MODFUN, GETARB, ITEM2 *)
+array-arg      = "(" whole-array ")" | whole-array ;
+                                          (* src: EVAL.Z80:GETARB, GETARR *)
+
+
+(* ======================================================================
+   8. INLINE Z80 ASSEMBLER  (between "[" and "]")
+   ====================================================================== *)
+
+(* Mnemonics and register names are matched case-insensitively (bit 5
+   masked).  The program text has already been tokenised, so "DEF" in
+   DEFB/DEFW/DEFM, "AND", "OR" and "CALL" arrive as tokens and are matched
+   as such.
+   QUIRK: space, "," and ")" are all treated as interchangeable
+   delimiters and skipped between operands, so "LD A B" is accepted and
+   the comma is not actually required.                                     *)
+                                          (* src: ASMB.Z80:FIND, SKIP, DELIM *)
+
+asm-text       = asm-statement { asm-separator asm-statement } ;
+asm-separator  = ":" | EOL ;              (* EOL continues on next line *)
+                                          (* src: ASMB.Z80:ASSEM; EXEC.Z80:ASM0 *)
+asm-statement  = [ asm-label ] [ asm-instruction ] [ asm-comment ] ;
+                                          (* src: ASMB.Z80:ASSEM, ASMB *)
+asm-label      = "." variable ;
+    (* Assigns P% to the variable; "Multiple label" if it is already
+       non-zero while OPT bit 1 is clear (first pass).                     *)
+                                          (* src: ASMB.Z80:ASMB *)
+asm-comment    = ( ";" | "\" ) { ? any character except ":" and EOL ? } ;
+    (* QUIRK: a comment ends at ":" as well as at EOL.                     *)
+                                          (* src: ASMB.Z80:TERM, ASSEM3, TERM0 *)
+
+asm-instruction
+               = "NOP" | "RLCA" | "RRCA" | "RLA" | "RRA" | "DAA" | "CPL"
+               | "SCF" | "CCF" | "HALT" | "EXX" | "DI" | "EI"
+               | "EX" "AF" "AF'" | "EX" "DE" "HL" | "EX" "(SP)" pair-hl
+               | "NEG" | "RETN" | "RETI" | "IM" ( "0" | "1" | "2" )
+               | "RRD" | "RLD"
+               | "LDI" | "CPI" | "INI" | "OUTI" | "LDD" | "CPD" | "IND"
+               | "OUTD" | "LDIR" | "CPIR" | "INIR" | "OTIR" | "LDDR"
+               | "CPDR" | "INDR" | "OTDR"
+               | ( "BIT" | "RES" | "SET" ) asm-expr asm-reg8
+               | ( "RLC" | "RRC" | "RL" | "RR" | "SLA" | "SRA" | "SRL" )
+                 asm-reg8
+               | ( "PUSH" | "POP" ) asm-pair
+               | ( "SUB" | "AND" | "XOR" | "OR" | "CP" ) asm-src8
+               | ( "ADD" | "ADC" | "SBC" ) ( "A" asm-src8 | pair-hl asm-pair )
+               | ( "INC" | "DEC" ) ( asm-reg8 | asm-pair )
+               | "IN" asm-reg8 ( "(C)" | asm-expr )   (* IN A,(n): "(n)" is
+                                                         a bracketed expr *)
+               | "OUT" ( "(C)" | asm-expr ) asm-reg8  (* OUT (n),A *)
+               | ( "JR" | "DJNZ" ) [ asm-cond ] asm-expr      (* relative *)
+               | "JP" ( [ asm-cond ] asm-expr | "(HL)" | "(IX)" | "(IY)" )
+               | "CALL" [ asm-cond ] asm-expr
+               | "RST" asm-expr
+               | "RET" [ asm-cond ]
+               | "LD" asm-ld-operands
+               | "DEFB" asm-expr | "DEFW" asm-expr | "DEFM" expression
+               | "OPT" asm-expr ;
+    (* asm-expr is any BASIC integer expression (EXPRI).  JR/DJNZ target
+       must be in range ("Out of range").  DEFM takes a string expression.
+       UNSURE: exact per-group operand validation was only partly traced
+       (e.g. which register combinations are rejected); the ED/CB/DD/FD
+       encodings were not checked.                                         *)
+                                          (* src: ASMB.Z80:OPCODS, GROUP2..GROUPF,
+                                             MISC, OPT *)
+
+asm-ld-operands
+               = ( "I" | "R" ) "A" | "A" ( "I" | "R" )
+               | ( "(BC)" | "(DE)" ) "A" | "A" ( "(BC)" | "(DE)" )
+               | asm-reg8 asm-src8                         (* LD r,r / LD r,n *)
+               | asm-pair asm-expr          (* LD rr,nn ; LD rr,(nn) when the
+                                               expression is bracketed *)
+               | "SP" pair-hl
+               | "(" asm-expr ")" ( asm-pair | "A" ) ;     (* LD (nn),rr/A *)
+    (* LD (HL),(HL) is rejected.                                           *)
+                                          (* src: ASMB.Z80:GROUPF, LDOPS, LDIN, LD16,
+                                             LD8 *)
+
+asm-reg8       = "B" | "C" | "D" | "E" | "H" | "L" | "(HL)" | "A"
+               | "(IX" [ ( "+" | "-" ) asm-expr ] ")"
+               | "(IY" [ ( "+" | "-" ) asm-expr ] ")" ;
+    (* the displacement is read as an expression including its sign *)
+asm-src8       = asm-reg8 | asm-expr ;
+asm-pair       = "BC" | "DE" | "HL" | "IX" | "IY" | "AF" | "SP" ;
+pair-hl        = "HL" | "IX" | "IY" ;
+asm-cond       = "NZ" | "Z" | "NC" | "C" | "PO" | "PE" | "P" | "M" ;
+asm-expr       = expression ;             (* integer *)
+                                          (* src: ASMB.Z80:OPRNDS, OPND, OFFSET,
+                                             NUMBER, COND, PAIR, REG *)
+
+(* End of grammar *)
