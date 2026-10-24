@@ -1,6 +1,6 @@
 # Plan — syntax-viewer
 
-_Status: draft v0.12 · Last updated: 2026-10-24_
+_Status: draft v0.13 · Last updated: 2026-10-24_
 
 ## Approach
 Three layers, so parsers can be tested without the GUI (NFR-1):
@@ -35,7 +35,7 @@ Rendering (FR-11): readers record each rule's source span (offsets plus line). T
 | M5b | EBNF ISO 14977 reader, comment attachment, uppercase convention (model + CLI) | FR-3, FR-14 (model), FR-15 (model) | **done** (E8) |
 | M6 | GUI: two-pane layout, symbol list, rule view (with comments), uppercase-lexical prompt and per-file setting | FR-1, FR-6, FR-7, FR-10, FR-14, FR-15 | **done** (E12) |
 | M7 | Link navigation, filter, normalised/original toggle, used-by section, history | FR-8, FR-9, FR-11, FR-12, FR-13 | **done** (E12) |
-| M8 | Error handling, performance check, polish: README, manual desktop check (TC-02, TC-15), readers refactor, Makefile | NFR-2, NFR-3 | in progress: fuzzing/timing (X2), `readers/tokens.py` refactor and Makefile done (E15); README and desktop check open |
+| M8 | Error handling, performance check, polish: README, manual desktop check (TC-02, TC-15), readers refactor, Makefile | NFR-2, NFR-3 | **done** (E18): fuzzing/timing (X2), `readers/tokens.py` and Makefile (E15), desktop check passed, README with screenshot |
 
 ## Tasks
 - [x] Resolve Q1–Q3, Q5 (E3)
@@ -45,7 +45,7 @@ Rendering (FR-11): readers record each rule's source span (offsets plus line). T
 - [x] Resolve Q7, Q8 (E7)
 - [x] Model: `Rule.comments` (leading/inner/trailing), `Grammar.lexical_candidates()` and `set_lexical()`, CLI `--uppercase-terminals` (FR-14, FR-15)
 - [x] Shared comment-attachment helper (`model.attach_comments`) for readers: readers report comment spans; the helper assigns them to rules by position
-- [ ] M1…M8 as above
+- [x] M1…M8 as above
 
 ## Risks / decisions
 - `.y` is used by both Yacc/Bison and Lemon. Resolved (E13): a `%%` line means Yacc/Bison, otherwise `name ::=` rules mean Lemon.
@@ -55,9 +55,9 @@ Rendering (FR-11): readers record each rule's source span (offsets plus line). T
 - The original-text view depends on accurate source spans. Every reader must record them (covered by TC-29).
 
 - `lark` is a **dev-only** dependency, used to cross-check rule names (test_lark). The app does not need it.
-- Next: README, then the user's desktop check (`make demo-*`) of TC-02, TC-15, and TC-61.
+- All milestones M0–M8 are done. Open: deferred features (Spec §6: filter by kind, regex filter; FR-3: Lark templates).
 - Decision E15: **one virtualenv per host** (`.venv-<hostname>`), because the tree is shared over NFS between the VM and the user's machine and virtualenvs are not relocatable. All tooling goes through `make`; the app runs as `python -m syntax_viewer`.
-- Repository (E16): `git@github.com:maarten-boot/syntax-viewer.git`, branch `main`; the project was imported on top of GitHub's initial commit (MIT LICENSE). Pushing is left to the user. Open item: `c99.y` has no stated license (see `tests/fixtures/SOURCES.md`).
+- Repository (E16): `git@github.com:maarten-boot/syntax-viewer.git`, branch `main`; the project was imported on top of GitHub's initial commit (MIT LICENSE). Pushing is left to the user. `c99.y` license resolved (E19): its upstream, quut.com, allows derived work (see `tests/fixtures/SOURCES.md`).
 - Layout: `src/syntax_viewer/` (model, render, history, browser, page, gui, cli, `readers/{tokens,clex,iso_ebnf,w3c_ebnf,lark,yacc,lemon}`), `tests/` (pytest, fixtures, `fuzz_readers.py`), `tools/screenshots.py`, `Makefile`.
 - Manual check still needed on a real desktop: file dialog (TC-02), visual styling (TC-15), real mouse/keyboard use.
 

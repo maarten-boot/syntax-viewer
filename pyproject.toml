@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "syntax-viewer"
 version = "0.1.0"
 description = "Browse grammars (Lark, EBNF, Lemon, Yacc, Bison) as hyperlinked rules"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 

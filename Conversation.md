@@ -226,3 +226,25 @@ Proposed next (M8): README, a shared token-stream base for the readers, and a de
 - Added `tests/fixtures/SOURCES.md` with the provenance and license of each fixture. `c99.y` (gist) states no license, which matters if the repo is public.
 
 **User:** commit on main, no push. Committed as one import commit on `main`.
+
+### Entry 17 — Pushed
+**User:** "ok pushed." (`main` at 7a20840.)
+
+**Assistant:** Could not verify from the VM, which has no GitHub SSH key (`git fetch` gives "Permission denied (publickey)"); push and pull happen on the user's host. Open items:
+- README (M8)
+- the user's desktop check of TC-02, TC-15, and TC-61 (`make venv && make demo-*`)
+- the decision on `c99.y`, which has no stated license
+
+### Entry 18 — Desktop check passed, README
+**User:** "yes please, i ran a inspection it looks very nice and workable"
+
+**Assistant:**
+- Recorded TC-02, TC-15, and TC-61 as passed manually by the user.
+- Wrote `README.md`, replacing the GitHub stub ("synax-viewer"), with a screenshot (`docs/screenshot.png`, made with `make screenshots`). It covers features, the format table, running via `make`, CLI, keys, development targets, layout, how to add a reader plug-in, the design documents, and the license.
+- `pyproject.toml` now uses `readme = "README.md"`.
+- M8 is done, and with it all milestones. Remaining: the `c99.y` license decision and the deferred features.
+
+### Entry 19 — c99.y provenance
+**User:** The C99 grammar comes from https://www.quut.com/c/ANSI-C-grammar-y-1999.html. Its FAQ says: "So, can I use this to make derived work? Yes, you can use this to make derived work with or without attribution; both I and the grammar's original poster are fine with that." The FAQ references https://www.quut.com/c/ANSI-C-grammar-y.html.
+
+**Assistant:** Updated `tests/fixtures/SOURCES.md` with the upstream URL, the author (Jutta Degener), and the terms, keeping attribution. Closed the open item in Plan.md, so `c99.y` stays.

@@ -2,12 +2,12 @@
 
 _Last updated: 2026-10-24_
 
-Each test case traces to a Spec requirement. Fixtures go in `tests/fixtures/`. Automated tests use pytest. ✅ = automated and passing. GUI cases are manual until a GUI test harness exists.
+Each test case traces to a Spec requirement. Fixtures go in `tests/fixtures/`. Automated tests use pytest. ✅ = passing (automated, or "manual ✅" when checked by the user). GUI cases are manual until a GUI test harness exists.
 
 | TC | Spec | Description | Input | Expected | Auto? |
 |----|------|-------------|-------|----------|-------|
 | TC-01 | FR-1 | Open a file from the command line | `syntax-viewer tests/fixtures/json-w3c.ebnf` | Window opens with calc symbols listed | yes ✅ (offscreen; via `open()`) |
-| TC-02 | FR-1 | Open via file dialog | `make demo-json`, then File > Open > `tests/fixtures/kukel.lark` | Symbols listed | manual |
+| TC-02 | FR-1 | Open via file dialog | `make demo-json`, then File > Open > `tests/fixtures/kukel.lark` | Symbols listed | manual ✅ (user, 2026-10-24) |
 | TC-03 | FR-2 | Detect by extension | `.lark`, `.ebnf` | Lark / EBNF reader chosen | yes ✅ (both) |
 | TC-04 | FR-2 | Disambiguate `.y` | `calc-bison.y`, `c99.y` vs `sqlite-parse.y` | Bison reader vs Lemon reader | yes ✅ |
 | TC-05 | FR-2 | Manual format override | Force Lemon on `.txt` file | Lemon reader used | yes ✅ |
@@ -20,7 +20,7 @@ Each test case traces to a Spec requirement. Fixtures go in `tests/fixtures/`. A
 | TC-12 | FR-4 | Plug-in registration (direct and via entry points) | Register a dummy reader | Registry selects it for its extension; no core changes | yes ✅ |
 | TC-13 | FR-5 | Same grammar, different formats | Inline calc grammar in all five formats | Same rule shape (alternatives and item kinds) | yes ✅ |
 | TC-14 | FR-5 | EBNF operators in model and render | `a ::= b? c* (d \| e)+` | Opt, Star, Plus(Alt) nodes; renders `b? c* ( d \| e )+` | yes ✅ |
-| TC-15 | FR-6 | Symbol list contents | calc grammar | All NTs and Ts listed, distinct styling, scrollable | manual |
+| TC-15 | FR-6 | Symbol list contents | calc grammar | All NTs and Ts listed, distinct styling, scrollable | manual ✅ (user, 2026-10-24) |
 | TC-16 | FR-6 | Undefined symbol marked | Rule referencing `foo` that is never defined | `foo` shown with an "undefined" marker | yes ✅ (model) + manual |
 | TC-17 | FR-7 | Show definition | Click `expr` | Right pane shows all alternatives of `expr` | yes ✅ (page) |
 | TC-18 | FR-8 | Follow an NT link | Click `term` in the `expr` definition | Left list selects and scrolls to `term`; right shows `term` | yes ✅ (offscreen) |
@@ -66,4 +66,4 @@ Each test case traces to a Spec requirement. Fixtures go in `tests/fixtures/`. A
 | TC-58 | FR-11 | Actions stripped in original view | calc-bison `exp`, sqlite `explain` | No action code; no blank or trailing-space lines | yes ✅ |
 | TC-59 | FR-10 | Rule-less non-terminal wording | sqlite `part_opt`; Lark `%import … -> x` | "declared, but has no rules" / "rule defined in another grammar" | yes ✅ |
 | TC-60 | NFR-2 | Truncated real grammars never crash | Every prefix of six fixtures; `%%\na [` | Parses or raises GrammarError, nothing else (plus `tests/fuzz_readers.py` for mutation fuzzing) | yes ✅ |
-| TC-61 | NFR-1 | Runs on the user's host from the shared tree | `make venv && make demo-sqlite` on a desktop host | Window opens; no "required file not found"; the VM's venv is untouched | manual |
+| TC-61 | NFR-1 | Runs on the user's host from the shared tree | `make venv && make demo-sqlite` on a desktop host | Window opens; no "required file not found"; the VM's venv is untouched | manual ✅ (user, 2026-10-24) |
