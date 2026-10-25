@@ -248,3 +248,34 @@ Proposed next (M8): README, a shared token-stream base for the readers, and a de
 **User:** The C99 grammar comes from https://www.quut.com/c/ANSI-C-grammar-y-1999.html. Its FAQ says: "So, can I use this to make derived work? Yes, you can use this to make derived work with or without attribution; both I and the grammar's original poster are fine with that." The FAQ references https://www.quut.com/c/ANSI-C-grammar-y.html.
 
 **Assistant:** Updated `tests/fixtures/SOURCES.md` with the upstream URL, the author (Jutta Degener), and the terms, keeping attribution. Closed the open item in Plan.md, so `c99.y` stays.
+
+### Entry 20 — Pushed
+**User:** "i pushed": `main` at 9c76480 (README, desktop check, fixture provenance) is on GitHub.
+
+**Assistant:** Logged. The project is complete against Spec v0.11 and Plan v0.13. Deferred features remain available as next steps.
+
+### Entry 21 — Implement the deferred features
+**User:** "yes add all 3 suggestions": filter by kind, regex filter, Lark rule templates.
+
+**Assistant:** Spec v0.12:
+- FR-16 kind filter: checkboxes for non-terminals / terminals / undefined, combined with the text filter.
+- FR-17 regex filter: a `.*` toggle. Matching is a case-insensitive search. An invalid pattern marks the filter box with the error and keeps the last valid pattern, so the list does not jump while typing.
+- FR-9 extended: when a link targets a symbol hidden by the kind filter, that one kind is switched back on rather than the whole selection being reset. The text filter is still cleared.
+- FR-3: Lark templates `name{a, b}: …` and uses `name{X, ","}` are supported. Parameters are local placeholders, not symbols. A use counts as a reference to the template and to its arguments.
+
+Kind selection and regex mode persist when another file is opened; the text filter resets as before. Added TC-62…TC-67.
+
+### Entry 22 — M9 implemented
+**Assistant:**
+- **Kind filter (FR-16):** three checkboxes under the filter box, backed by `Browser.kinds`.
+- **Regex filter (FR-17):** a `.*` toggle. An invalid pattern gives a red border and a tooltip, and the last valid pattern stays in use.
+- **FR-9 reveal:** a link to a symbol hidden by the kind filter re-checks only that kind. Kinds and regex mode survive opening another file.
+- **Lark templates:** new model nodes `Param` and `Call` plus `Rule.params`. Rendered as `name{p, q} ::= …` and `name{a, b}`. Parameters are not symbols; template pages are labelled "non-terminal (template)". An undefined template use is flagged undefined.
+- **New fixture:** `templates.lark`, also in the fuzzer and the screenshots.
+- **Testing:** two test-side mistakes fixed (an obsolete "templates unsupported" case and a wrong TC-64 expectation). `make check`: lint clean, 153 tests pass, 0 fuzz crashes. Screenshots of the regex/kind controls and a template page were reviewed.
+- **Docs:** README updated (filters, templates, FR-17).
+
+### Entry 23 — Crosscheck X3, commit
+**User:** "you can continue" (after the X3 + commit offer).
+
+**Assistant:** Ran X3. Findings: TC-61 not traced to NFR-1; FR-5 and the Plan's model signature were missing `Param`/`Call` and the `elided`/`params` fields; templates absent from FR-12 and the glossary; two untested behaviours. No code mismatches. All fixed; details in Plan.md › Crosscheck log X3. Then committed on `main` for the user to push.

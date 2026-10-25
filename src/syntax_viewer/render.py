@@ -6,11 +6,13 @@ from typing import Callable
 
 from syntax_viewer.model import (
     Alt,
+    Call,
     Empty,
     Except,
     Expr,
     Grammar,
     Opt,
+    Param,
     Plus,
     Repeat,
     Seq,
@@ -35,6 +37,10 @@ def _prec(expr: Expr) -> int:
 
 
 def expr_text(expr: Expr, outer: int = 0, leaf: Leaf = _plain) -> str:
+    if isinstance(expr, Call):
+        return f"{leaf(expr.name)}{{{', '.join(expr_text(a, 0, leaf) for a in expr.args)}}}"
+    if isinstance(expr, Param):
+        return expr.name
     name = symbol_name(expr)
     if name is not None:
         text = leaf(name)
@@ -63,6 +69,8 @@ def rule_text(grammar: Grammar, name: str, leaf: Leaf = _plain) -> str:
     if body is None:
         return ""
     alts = [expr_text(a, 1, leaf) for a in alternatives(body)]
-    pad = " " * len(name)
-    lines = [f"{leaf(name)} ::= {alts[0]}"] + [f"{pad}   | {a}" for a in alts[1:]]
+    params = grammar.rules[name][0].params
+    head = f"{name}{{{', '.join(params)}}}" if params else name
+    pad = " " * len(head)
+    lines = [f"{leaf(name)}{head[len(name):]} ::= {alts[0]}"] + [f"{pad}   | {a}" for a in alts[1:]]
     return "\n".join(lines)

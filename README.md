@@ -6,7 +6,8 @@ its rules as hyperlinked text.
 ![syntax-viewer showing the kukel grammar](docs/screenshot.png)
 
 - **Symbol list** (left): all non-terminals, terminals and undefined symbols,
-  colour-coded, with a filter box.
+  colour-coded. Filter by name (substring, or regular expression with `.*`)
+  and by kind with the checkboxes.
 - **Rule view** (right): the selected symbol's definition. Every symbol in it
   is a link: following it selects that symbol on the left and shows its
   definition.
@@ -22,7 +23,7 @@ its rules as hyperlinked text.
 |--------|------------|-------|
 | ISO 14977 EBNF (`ebnf-iso`) | `.ebnf`, `.iso` | Nested `(* *)` comments, `,` or plain juxtaposition, `a - b`, `n * x`, `? … ?`, `"a" .. "z"` |
 | W3C EBNF (`ebnf-w3c`) | `.ebnf`, `.w3c` | XML-spec notation: `::=`, `[a-z]` classes, `#xN`, `[ VC: … ]` notes |
-| Lark (`lark`) | `.lark` | `?`/`!` rules, aliases, priorities, `%import`/`%ignore`/`%declare`/`%override`/`%extend` (templates not yet) |
+| Lark (`lark`) | `.lark` | `?`/`!` rules, aliases, priorities, templates `name{a, b}`, `%import`/`%ignore`/`%declare`/`%override`/`%extend` |
 | Yacc/Bison (`yacc`) | `.y`, `.yy`, `.ypp`, `.bison` | Actions, prologue and epilogue skipped; `%token`/`%type`/precedence and string aliases kept |
 | Lemon (`lemon`) | `.y`, `.lemon` | Aliases, `X\|Y` multi-terminals, `%token_class`, `%fallback`, `%wildcard`; `%ifdef` sections all shown |
 
@@ -98,7 +99,7 @@ through the `syntax_viewer.readers` entry-point group of your own package.
 
 ### Design documents
 
-- [Spec.md](Spec.md): requirements (FR-1 to FR-15, NFR-1 to NFR-3)
+- [Spec.md](Spec.md): requirements (FR-1 to FR-17, NFR-1 to NFR-3)
 - [Plan.md](Plan.md): approach, milestones, decisions and the crosscheck log
 - [tests/TestCases.md](tests/TestCases.md): test cases traced to requirements
 - [Conversation.md](Conversation.md): the design conversation this project grew from

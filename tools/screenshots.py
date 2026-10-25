@@ -19,6 +19,7 @@ DEFAULT = [
     ("tests/fixtures/kukel.ebnf", "Identifier", False),
     ("tests/fixtures/BBCBASIC.ebnf", "type-suffix", True),
     ("tests/fixtures/kukel.lark", "statement", False),
+    ("tests/fixtures/templates.lark", "_separated", False),
     ("tests/fixtures/json-w3c.ebnf", "object", False),
     ("tests/fixtures/calc-bison.y", "exp", True),
     ("tests/fixtures/c99.y", "postfix_expression", False),

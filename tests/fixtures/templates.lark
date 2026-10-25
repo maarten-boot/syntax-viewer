@@ -1,0 +1,14 @@
+// Lark rule templates, written for syntax-viewer tests.
+start: _separated{item, ","} ";"
+
+// A list of `x` separated by `sep`.
+_separated{x, sep}: x (sep x)*
+
+?item: NAME
+     | "[" _separated{item, _ws_sep{";"}} "]"   -> nested
+
+_ws_sep{s}: s
+
+NAME: /[a-z]+/
+%import common.WS
+%ignore WS

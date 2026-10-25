@@ -11,6 +11,8 @@ from PySide6.QtCore import QSettings, Qt, QUrl
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QHBoxLayout,
     QFileDialog,
     QLineEdit,
     QListWidget,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -73,7 +76,21 @@ class MainWindow(QMainWindow):
         left = QWidget()
         layout = QVBoxLayout(left)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.filter)
+        self.regex_button = QToolButton(text=".*", checkable=True, toolTip="Regular expression (FR-17)")
+        self.regex_button.toggled.connect(self._on_regex)
+        row = QHBoxLayout()
+        row.addWidget(self.filter)
+        row.addWidget(self.regex_button)
+        layout.addLayout(row)
+        self.kind_boxes: dict[Kind, QCheckBox] = {}
+        kinds = QHBoxLayout()
+        for kind, label in ((Kind.NONTERMINAL, "Non-terminals"), (Kind.TERMINAL, "Terminals"), (Kind.UNDEFINED, "Undefined")):
+            box = QCheckBox(label, checked=True)
+            box.toggled.connect(lambda on, k=kind: self._on_kind(k, on))
+            self.kind_boxes[kind] = box
+            kinds.addWidget(box)
+        kinds.addStretch()
+        layout.addLayout(kinds)
         layout.addWidget(self.list)
 
         self.view = QTextBrowser(openLinks=False)
@@ -173,6 +190,14 @@ class MainWindow(QMainWindow):
 
     # -- navigation --
 
+    def _on_regex(self, on: bool) -> None:
+        self.browser.set_regex(on)
+        self.refresh()
+
+    def _on_kind(self, kind: Kind, on: bool) -> None:
+        self.browser.set_kind(kind, on)
+        self.refresh()
+
     def _on_filter(self, text: str) -> None:
         self.browser.set_filter(text)
         self.refresh()
@@ -219,6 +244,13 @@ class MainWindow(QMainWindow):
                 self.filter.blockSignals(True)
                 self.filter.setText(b.filter_text)
                 self.filter.blockSignals(False)
+            for kind, box in self.kind_boxes.items():  # e.g. re-checked by a link (FR-9)
+                if box.isChecked() != (kind in b.kinds):
+                    box.blockSignals(True)
+                    box.setChecked(kind in b.kinds)
+                    box.blockSignals(False)
+            self.filter.setStyleSheet("border: 1px solid #dc2626;" if b.filter_error else "")
+            self.filter.setToolTip(f"Invalid regular expression: {b.filter_error}" if b.filter_error else "")
             self.list.clear()
             current_item = None
             for sym in b.visible():

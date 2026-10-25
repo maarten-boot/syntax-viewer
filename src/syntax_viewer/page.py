@@ -83,6 +83,8 @@ def build_page(grammar: Grammar, name: str, original: bool = False) -> str:
     kind = {Kind.NONTERMINAL: "non-terminal", Kind.TERMINAL: "terminal", Kind.UNDEFINED: "undefined"}[sym.kind]
     if name in grammar.lexical:
         kind = "terminal (lexical rule)"
+    elif rules and rules[0].params:
+        kind = "non-terminal (template)"
     where = f" · line {sym.span.line}" if sym.span else ""
 
     parts = [

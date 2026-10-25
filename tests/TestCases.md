@@ -67,3 +67,9 @@ Each test case traces to a Spec requirement. Fixtures go in `tests/fixtures/`. A
 | TC-59 | FR-10 | Rule-less non-terminal wording | sqlite `part_opt`; Lark `%import … -> x` | "declared, but has no rules" / "rule defined in another grammar" | yes ✅ |
 | TC-60 | NFR-2 | Truncated real grammars never crash | Every prefix of six fixtures; `%%\na [` | Parses or raises GrammarError, nothing else (plus `tests/fuzz_readers.py` for mutation fuzzing) | yes ✅ |
 | TC-61 | NFR-1 | Runs on the user's host from the shared tree | `make venv && make demo-sqlite` on a desktop host | Window opens; no "required file not found"; the VM's venv is untouched | manual ✅ (user, 2026-10-24) |
+| TC-62 | FR-3 | Lark template definition and use | `_sep{x, sep}: x (sep x)*` / `start: _sep{NAME, ","}` | `_sep` has params (x, sep); body uses Param nodes; `start` body is Call; used_by[_sep]={start}, used_by[NAME]={start}; no undefined `x`/`sep`; renders `_sep{x, sep} ::= x ( sep x )*` | yes ✅ |
+| TC-63 | FR-3 | Malformed templates | `t{x: x`, `start: t{a` | GrammarError with line | yes ✅ |
+| TC-64 | FR-16 | Kind filter | json-w3c: uncheck terminals | Only non-terminals listed; combined with text filter | yes (controller) ✅ |
+| TC-65 | FR-17 | Regex filter | `^(object\|array)$`; then `obj(` | Exactly object and array; invalid pattern sets the error and keeps the previous list | yes (controller) ✅ |
+| TC-66 | FR-9, FR-16 | Link to a symbol hidden by the kind filter | Terminals unchecked, follow `'{'` | Terminals re-checked, `'{'` selected; non-terminal checkbox unchanged | yes (controller) ✅ |
+| TC-67 | FR-16, FR-17 | GUI controls | Toggle `.*` and the checkboxes; type an invalid regex; open another file | List updates; red border and tooltip; modes kept after open | yes (offscreen) ✅ |

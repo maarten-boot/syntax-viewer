@@ -144,6 +144,25 @@ class Special(Expr):
     text: str
 
 
+@dataclass(frozen=True)
+class Param(Expr):
+    """Template parameter inside a template body (Lark `name{x}`): a local
+    placeholder, not a symbol."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class Call(Expr):
+    """Use of a template (Lark `name{arg, ...}`): references `name` and its args."""
+
+    name: str
+    args: tuple[Expr, ...]
+
+    def children(self) -> tuple[Expr, ...]:
+        return self.args
+
+
 def seq(*items: Expr) -> Expr:
     """Build a sequence, collapsing trivial cases."""
     if not items:
@@ -167,7 +186,7 @@ def alternatives(expr: Expr) -> tuple[Expr, ...]:
 
 def symbol_name(expr: Expr) -> str | None:
     """Name under which a leaf expression appears in the symbol list."""
-    if isinstance(expr, SymRef):
+    if isinstance(expr, (SymRef, Call)):
         return expr.name
     if isinstance(expr, Literal):
         return expr.text
@@ -203,6 +222,7 @@ class Rule:
     body: Expr
     span: SourceSpan | None = None
     comments: list[Comment] = field(default_factory=list)  # FR-15
+    params: tuple[str, ...] = ()  # template parameters (Lark `name{a, b}: ...`)
     # Source ranges inside `span` left out of the original view (Yacc actions, FR-11).
     elided: list[SourceSpan] = field(default_factory=list)
 
@@ -273,7 +293,7 @@ class Grammar:
                     if name is None:
                         continue
                     if name not in self.symbols:
-                        kind = Kind.UNDEFINED if isinstance(node, SymRef) else Kind.TERMINAL
+                        kind = Kind.UNDEFINED if isinstance(node, (SymRef, Call)) else Kind.TERMINAL
                         self.symbols[name] = Symbol(name, kind)
                     self.used_by.setdefault(name, set()).add(lhs)
         return self

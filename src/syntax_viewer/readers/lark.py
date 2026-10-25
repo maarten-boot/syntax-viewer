@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from syntax_viewer.model import (
+    Call,
     Comment,
     Empty,
     Expr,
@@ -18,6 +19,7 @@ from syntax_viewer.model import (
     Kind,
     Literal,
     Opt,
+    Param,
     Plus,
     Range,
     Regex,
@@ -58,6 +60,7 @@ def _is_terminal(name: str) -> bool:
 class _Parser(TokenParser):
     def __init__(self, text: str, path: str | None):
         super().__init__(text, path)
+        self.params: tuple[str, ...] = ()  # parameters of the template being parsed
         self.comments: list[Comment] = []
         self.toks = self._tokenize()
 
@@ -127,17 +130,20 @@ class _Parser(TokenParser):
             name = self.take().text
         else:
             name = head.text
+        params: tuple[str, ...] = ()
         if self.at("{"):
-            raise self.error("rule templates are not supported yet", self.tok.start)
+            params = self.template_params()
         priority = None
         if self.at(".") and self.peek().kind == "int":
             self.take()
             priority = self.take().text
         self.expect(":")
+        self.params = params
         body = self.expansions()
+        self.params = ()
         last = self.toks[self.i - 1]
         self.end_of_statement()
-        g.add_rule(Rule(name, body, self.span(head.start, last.end)))
+        g.add_rule(Rule(name, body, self.span(head.start, last.end), params=params))
         if _is_terminal(name):
             g.lexical.add(name)
             if priority:
@@ -242,9 +248,32 @@ class _Parser(TokenParser):
             return Repeat(int(low.text), atom, int(high) if high else None)
         return atom
 
+    def template_params(self) -> tuple[str, ...]:
+        """`{a, b}` after a template's name."""
+        self.expect("{")
+        names = []
+        while True:
+            if self.tok.kind != "name":
+                raise self.error(f"expected template parameter, found {self.describe(self.tok)!r}", self.tok.start)
+            names.append(self.take().text)
+            if self.expect(",", "}").text == "}":
+                return tuple(names)
+
+    def template_args(self) -> tuple[Expr, ...]:
+        """`{X, ","}` after a template's name in a rule body."""
+        self.expect("{")
+        args = [self.expr()]
+        while self.expect(",", "}").text == ",":
+            args.append(self.expr())
+        return tuple(args)
+
     def atom(self) -> Expr:
         tok = self.take()
         if tok.kind == "name":
+            if tok.text in self.params:
+                return Param(tok.text)
+            if self.at("{"):
+                return Call(tok.text, self.template_args())
             return SymRef(tok.text)
         if tok.kind == "regex":
             return Regex(tok.text)

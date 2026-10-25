@@ -19,6 +19,7 @@ FIXTURES = {
     "BBCBASIC.ebnf": "ebnf-iso",
     "json-w3c.ebnf": "ebnf-w3c",
     "kukel.lark": "lark",
+    "templates.lark": "lark",
     "calc-bison.y": "yacc",
     "c99.y": "yacc",
     "sqlite-parse.y": "lemon",

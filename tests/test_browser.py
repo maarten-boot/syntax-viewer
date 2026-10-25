@@ -116,3 +116,53 @@ def test_lexical_terminal_page():
 def test_undefined_page():
     g = readers.load(str(FIX / "BBCBASIC.ebnf"))
     assert "never defined" in build_page(g, "EOL")
+
+
+from syntax_viewer.model import Kind  # noqa: E402
+
+
+def test_tc64_kind_filter(b):
+    b.set_kind(Kind.TERMINAL, False)
+    assert all(s.kind is Kind.NONTERMINAL for s in b.visible())
+    b.set_filter("ar")
+    assert names(b) == ["array", "char"]
+    b.set_filter("")
+    only_nt = len(names(b))
+    b.set_kind(Kind.TERMINAL, True)
+    assert len(names(b)) > only_nt and "'{'" in names(b)
+
+
+def test_tc65_regex_filter(b):
+    b.set_regex(True)
+    b.set_filter("^(OBJECT|array)$")
+    assert names(b) == ["array", "object"] or names(b) == ["object", "array"]
+    b.set_filter("obj(")
+    assert b.filter_error and set(names(b)) == {"object", "array"}  # previous pattern kept
+    b.set_filter("^obj")
+    assert b.filter_error is None and names(b) == ["object"]
+    b.set_regex(False)
+    b.set_filter("^obj")
+    assert names(b) == []  # substring mode: no literal "^obj"
+
+
+def test_tc66_link_reveals_hidden_kind(b):
+    b.set_kind(Kind.TERMINAL, False)
+    b.set_kind(Kind.UNDEFINED, False)
+    assert b.navigate("'{'")
+    assert Kind.TERMINAL in b.kinds and Kind.UNDEFINED not in b.kinds
+    assert "'{'" in names(b)
+
+
+def test_load_keeps_kinds_and_regex(b):
+    b.set_kind(Kind.TERMINAL, False)
+    b.set_regex(True)
+    b.set_filter("x")
+    b.load(readers.load(str(FIX / "kukel.lark")))
+    assert Kind.TERMINAL not in b.kinds and b.regex and b.filter_text == ""
+
+
+def test_tc66_back_reveals_hidden_kind(b):
+    b.navigate("'{'")
+    b.navigate("object")
+    b.set_kind(Kind.TERMINAL, False)
+    assert b.back() == "'{'" and Kind.TERMINAL in b.kinds and "'{'" in names(b)

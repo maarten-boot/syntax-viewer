@@ -175,3 +175,25 @@ def test_tc54_selected_item_scrolled_into_view(make, app):
     item = w.list.currentItem()
     assert item.text() == "Identifier"
     assert w.list.viewport().rect().intersects(w.list.visualItemRect(item))
+
+
+def test_tc67_kind_and_regex_controls(make):
+    from syntax_viewer.model import Kind
+
+    w = make()
+    w.open(str(FIX / "json-w3c.ebnf"))
+    w.kind_boxes[Kind.TERMINAL].setChecked(False)
+    assert all(not n.startswith(("'", "[", "#")) for n in list_names(w))
+    w.regex_button.setChecked(True)
+    w.filter.setText("^(object|array)$")
+    assert sorted(list_names(w)) == ["array", "object"]
+    w.filter.setText("obj(")
+    assert "dc2626" in w.filter.styleSheet() and "Invalid regular expression" in w.filter.toolTip()
+    assert sorted(list_names(w)) == ["array", "object"]
+    w._on_link(QUrl(href("'{'")))  # hidden terminal: kind re-checked, text filter cleared
+    assert w.kind_boxes[Kind.TERMINAL].isChecked() and w.filter.text() == "" and w.filter.styleSheet() == ""
+    assert w.list.currentItem().text() == "'{'"
+    w.kind_boxes[Kind.UNDEFINED].setChecked(False)
+    w.open(str(FIX / "BBCBASIC.ebnf"))
+    assert not w.kind_boxes[Kind.UNDEFINED].isChecked() and w.regex_button.isChecked()
+    assert "EOL" not in [n.lstrip("⚠ ") for n in list_names(w)]

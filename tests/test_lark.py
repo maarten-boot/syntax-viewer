@@ -59,7 +59,7 @@ def test_multiline_parens():
 
 @pytest.mark.parametrize(
     "text, line",
-    [("start: a\nb c\n", 2), ("start: (a\n", 2), ("start a\n", 1), ("start: a\n%frobnicate x\n", 2), ("t{x}: x\n", 1)],
+    [("start: a\nb c\n", 2), ("start: (a\n", 2), ("start a\n", 1), ("start: a\n%frobnicate x\n", 2)],
 )
 def test_tc11_malformed(text, line):
     with pytest.raises(GrammarError) as exc:
@@ -121,3 +121,46 @@ def test_tc59_imported_rule_page():
 
     g = read("start: x\n%import .other.rule -> x\n")
     assert "rule defined in another grammar" in build_page(g, "x")
+
+
+def test_tc62_templates():
+    from syntax_viewer.model import Call, Param, Star
+
+    g = read('_sep{x, sep}: x (sep x)*\nstart: _sep{NAME, ","}\nNAME: /\\w+/\n')
+    assert g.rules["_sep"][0].params == ("x", "sep")
+    assert g.body("_sep") == Seq((Param("x"), Star(Seq((Param("sep"), Param("x"))))))
+    assert g.body("start") == Call("_sep", (SymRef("NAME"), Literal('","')))
+    assert g.used_by["_sep"] == {"start"} and g.used_by["NAME"] == {"start"}
+    assert "x" not in g.symbols and "sep" not in g.symbols
+    assert rule_text(g, "_sep") == "_sep{x, sep} ::= x ( sep x )*"
+    assert rule_text(g, "start") == 'start ::= _sep{NAME, ","}'
+
+
+def test_tc62_template_page_links():
+    from syntax_viewer.page import build_page
+
+    g = read('_sep{x, sep}: x (sep x)*\nstart: _sep{NAME, ","}\nNAME: /\\w+/\n')
+    page = build_page(g, "start")
+    assert 'href="sym:_sep"' in page and 'href="sym:NAME"' in page
+    assert 'href="sym:x"' not in build_page(g, "_sep")
+    assert "non-terminal (template)" in build_page(g, "_sep")
+
+
+def test_tc62_undefined_template_use():
+    g = read("start: missing{A}\nA: \"a\"\n")
+    assert g.symbols["missing"].kind is Kind.UNDEFINED
+
+
+@pytest.mark.parametrize("text, line", [("t{x: x\n", 1), ("t{}: x\n", 1), ("start: t{a\n", 1), ("start: t{a,\n", 1)])
+def test_tc63_malformed_templates(text, line):
+    with pytest.raises(GrammarError) as exc:
+        read(text)
+    assert exc.value.line == line
+
+
+def test_tc62_template_fixture_is_valid_lark():
+    lark = pytest.importorskip("lark")
+    tree = lark.Lark((FIX / "templates.lark").read_text()).parse("a,b,[c;d];")
+    assert tree.data == "start"
+    g = readers.load(str(FIX / "templates.lark"))
+    assert g.used_by["_ws_sep"] == {"item"} and not any(s.kind is Kind.UNDEFINED for s in g.symbols.values())
